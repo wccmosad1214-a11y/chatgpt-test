@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Gemini チャット</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <h1>Gemini チャット</h1>
+    </header>
+
+    <main id="chat-log" class="chat-log" aria-live="polite"></main>
+
+    <div id="error-banner" class="error-banner" hidden></div>
+
+    <form id="chat-form" class="chat-form">
+      <div id="image-preview-wrap" class="image-preview-wrap" hidden>
+        <img id="image-preview" class="image-preview" alt="添付画像のプレビュー" />
+        <button type="button" id="remove-image-btn" class="remove-image-btn" aria-label="画像を削除">×</button>
+      </div>
+
+      <div class="input-row">
+        <label for="image-input" class="attach-btn" aria-label="画像を添付">
+          📷
+          <input type="file" id="image-input" accept="image/jpeg,image/png,image/webp" hidden />
+        </label>
+
+        <textarea
+          id="message-input"
+          class="message-input"
+          placeholder="Geminiに質問する..."
+          rows="1"
+          required
+        ></textarea>
+
+        <button type="submit" id="send-btn" class="send-btn">送信</button>
+      </div>
+    </form>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
