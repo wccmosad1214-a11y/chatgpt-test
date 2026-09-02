@@ -1,0 +1,1 @@
+Claude CodeとGitHubの接続テストに成功しました。
