@@ -1,0 +1,28 @@
+name: Gemini API Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/gemini-test.yml'
+
+jobs:
+  test-gemini:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Ask Gemini in Japanese
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-2.5-flash
+        run: node gemini-test.mjs "こんにちは。接続テストです。日本語で『Gemini API接続成功』という言葉を含めて短く返答してください。"
