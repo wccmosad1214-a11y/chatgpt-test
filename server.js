@@ -7,14 +7,17 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// gemini-test.mjs と同じデフォルトモデルを使用する(既存の接続テストと挙動を揃えるため)
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+const CONFIGURED_FALLBACK_MODEL =
+  process.env.GEMINI_FALLBACK_MODEL || "gemini-3.5-flash-lite";
+const DEFAULT_ALTERNATE_MODEL = "gemini-3.6-flash";
+const RETRY_DELAYS_MS = [1500, 3000];
+const RETRYABLE_STATUSES = new Set([429, 503]);
 
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const MAX_HISTORY_MESSAGES = 20;
 
@@ -32,6 +35,68 @@ const upload = multer({
 
 app.use(express.static(path.join(__dirname, "public")));
 app.use(express.json());
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getModelCandidates() {
+  const fallback =
+    CONFIGURED_FALLBACK_MODEL === GEMINI_MODEL
+      ? DEFAULT_ALTERNATE_MODEL
+      : CONFIGURED_FALLBACK_MODEL;
+  return [...new Set([GEMINI_MODEL, fallback])];
+}
+
+async function requestGemini({ apiKey, contents }) {
+  let lastResponse;
+  let lastErrorText = "";
+
+  for (const model of getModelCandidates()) {
+    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
+      if (attempt > 0) {
+        const delay = RETRY_DELAYS_MS[attempt - 1];
+        console.warn(
+          `Gemini API busy: retrying model=${model} attempt=${attempt + 1} after ${delay}ms`
+        );
+        await sleep(delay);
+      }
+
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey,
+          },
+          body: JSON.stringify({ contents }),
+        }
+      );
+
+      if (response.ok) {
+        if (model !== GEMINI_MODEL) {
+          console.warn(`Gemini API fallback succeeded: model=${model}`);
+        }
+        return response;
+      }
+
+      lastResponse = response;
+      lastErrorText = await response.text();
+      console.error(
+        `Gemini API error: model=${model} status=${response.status} ${lastErrorText}`
+      );
+
+      if (!RETRYABLE_STATUSES.has(response.status)) {
+        return { response, errorText: lastErrorText, exhausted: false };
+      }
+    }
+
+    console.warn(`Gemini API fallback: switching away from model=${model}`);
+  }
+
+  return { response: lastResponse, errorText: lastErrorText, exhausted: true };
+}
 
 function parseHistory(rawHistory) {
   if (!rawHistory) return [];
@@ -55,7 +120,6 @@ function parseHistory(rawHistory) {
       item.text.trim() !== ""
   );
 
-  // 直近 MAX_HISTORY_MESSAGES 件のみをGeminiへ送る(トークン数・料金の増加を防ぐため)
   return validated.slice(-MAX_HISTORY_MESSAGES);
 }
 
@@ -110,23 +174,19 @@ app.post("/api/chat", (req, res) => {
     ];
 
     try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-goog-api-key": apiKey,
-          },
-          body: JSON.stringify({ contents }),
-        }
-      );
+      const result = await requestGemini({ apiKey, contents });
+      const response = result instanceof Response ? result : result.response;
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`Gemini API error: ${response.status} ${errorText}`);
+      if (!response?.ok) {
+        if (result.exhausted && RETRYABLE_STATUSES.has(response?.status)) {
+          return res.status(503).json({
+            code: "GEMINI_BUSY",
+            error:
+              "Geminiが混雑中です。自動再試行と別モデルへの切り替えを行いましたが、応答がありませんでした。少し時間を空けてお試しください。",
+          });
+        }
         return res.status(502).json({
-          error: "Gemini APIへの問い合わせに失敗しました。しばらくしてからもう一度お試しください。",
+          error: "Gemini APIへの問い合わせに失敗しました。設定または通信状態をご確認ください。",
         });
       }
 
